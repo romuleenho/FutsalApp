@@ -4,7 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Futsal Rotation</title>
-<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#111827">
+<script src="sortable.min.js"></script>
 <style>
   :root { --orange:#f97316; --blue:#2563eb; --gray:#9ca3af; --bg:#111827; --card:#1f2937; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -125,6 +131,7 @@ Sortable.create(listEl, {
   }
 });
 render();
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {});
 </script>
 </body>
 </html>
