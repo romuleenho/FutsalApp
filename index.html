@@ -43,6 +43,19 @@
   .sortable-ghost { opacity:.35; }
   .sortable-chosen { box-shadow:0 8px 24px rgba(0,0,0,.5); }
   .divider { text-align:center; color:#9ca3af; font-weight:700; margin:-2px 0 8px; }
+  #panel { position:fixed; inset:0; background:rgba(0,0,0,.7); display:none; z-index:10; padding:max(16px,env(safe-area-inset-top)) 16px 16px; }
+  #panel.open { display:flex; }
+  .sheet { margin:auto; width:100%; max-width:720px; max-height:100%; background:var(--card); border-radius:20px; display:flex; flex-direction:column; padding:16px; }
+  .sheet h2 { margin:0 0 4px; font-size:1.6rem; }
+  .sheet p { margin:0 0 10px; color:#d1d5db; }
+  .sheet .row { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .sheet .row button { padding:12px 16px; font-size:1.1rem; background:#374151; flex:1; }
+  .sheet .row button.done { background:#16a34a; }
+  #rosterList { overflow-y:auto; list-style:none; margin:0 0 10px; padding:0; flex:1; }
+  #rosterList li { background:#374151; color:#fff; min-height:64px; margin-bottom:8px; cursor:pointer; }
+  #rosterList li.on { background:#16a34a; }
+  #rosterList .name { font-size:1.7rem; }
+  .check { font-size:2rem; width:48px; text-align:center; }
 </style>
 </head>
 <body>
@@ -52,19 +65,26 @@
   <button class="o" id="outO">Orange Out</button>
   <button class="b" id="outB">Blue Out</button>
   <button class="both" id="outBoth">Both Out</button>
+  <button id="rosterBtn" style="background:#374151">👥 Roster</button>
 </div>
-<form class="add" id="addForm">
-  <input id="newName" placeholder="Add player name" autocomplete="off" autocapitalize="words">
-  <button type="submit">Add</button>
-</form>
 <div id="status"></div>
 <ul id="list"></ul>
+<div id="panel"><div class="sheet">
+  <h2>Roster</h2>
+  <p>Tap a name to add/remove it from tonight's game. Saved on this device.</p>
+  <div class="row"><button id="selAll">Select all</button><button id="selNone">Select none</button><button class="done" id="closePanel">Done</button></div>
+  <ul id="rosterList"></ul>
+  <form class="add" id="addForm" style="padding:0">
+    <input id="newName" placeholder="Add new name to roster" autocomplete="off" autocapitalize="words">
+    <button type="submit">Add</button>
+  </form>
+</div></div>
 
 <script>
-const KEY = 'futsal-rotation-v1';
-const DEFAULTS = ['Player 1','Player 2','Player 3','Player 4','Player 5','Player 6','Player 7','Player 8','Player 9','Player 10','Player 11','Player 12','Player 13','Player 14'];
-let state = { players: DEFAULTS.slice(), started: false };
-try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.players)) state = s; } catch (e) {}
+const KEY = 'futsal-rotation-v2';
+const ROSTER = ['Akash Soccer','Kurvin','Ayodeji','Rayan Resenha Futebol','Brunno Futebol','Olamide Soccer','Ricardo Soccer','Giovanni Soccer Angui','Eder Soccer','Dr Richardson','Dafe Soccer','Rilwan Omololu Bello','Christovao Junger','Jaime Soccer Elite','Imajinary','Evans'];
+let state = { roster: ROSTER.slice(), players: ROSTER.slice(), started: false };
+try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.players) && Array.isArray(s.roster)) state = s; } catch (e) {}
 
 const $ = id => document.getElementById(id);
 const listEl = $('list');
@@ -85,7 +105,13 @@ function render() {
     li.querySelector('.pos').textContent = i + 1;
     li.querySelector('.name').textContent = name;
     li.querySelector('.del').onclick = () => {
-      if (confirm('Remove ' + name + '?')) { state.players.splice(i, 1); save(); render(); }
+      state.players.splice(i, 1); save(); render(); renderRoster();
+    };
+    li.querySelector('.name').onclick = () => {
+      const v = (prompt('Edit name', name) || '').trim();
+      if (!v || v === name) return;
+      const r = state.roster.indexOf(name); if (r >= 0) state.roster[r] = v;
+      state.players[i] = v; save(); render(); renderRoster();
     };
     listEl.appendChild(li);
   });
@@ -94,7 +120,7 @@ function render() {
   $('outO').disabled = $('outB').disabled = $('outBoth').disabled = !state.started;
   $('status').textContent = state.started
     ? 'Game on: top 5 Orange vs next 5 Blue. Next up: ' + (state.players[10] || '—')
-    : 'Press Start Game to assign teams. Drag ☰ to reorder anytime.';
+    : 'Press Start Game to assign teams. Drag ☰ to reorder, tap a name to edit, 👥 Roster to pick players.';
 }
 
 $('start').onclick = () => { state.started = true; save(); render(); };
@@ -111,13 +137,41 @@ $('outO').onclick = () => out(5, 0);   // orange = positions 1-5
 $('outB').onclick = () => out(5, 5);   // blue = positions 6-10
 $('outBoth').onclick = () => out(10, 0);
 
+function renderRoster() {
+  const ul = $('rosterList'); ul.innerHTML = '';
+  state.roster.forEach(name => {
+    const on = state.players.includes(name);
+    const li = document.createElement('li'); li.className = on ? 'on' : '';
+    li.innerHTML = '<span class="check"></span><span class="name"></span><button class="del" aria-label="Delete from roster">🗑</button>';
+    li.querySelector('.check').textContent = on ? '✓' : '+';
+    li.querySelector('.name').textContent = name;
+    li.onclick = () => {
+      state.players = on ? state.players.filter(p => p !== name) : state.players.concat(name);
+      save(); render(); renderRoster();
+    };
+    li.querySelector('.del').onclick = e => {
+      e.stopPropagation();
+      if (!confirm('Delete ' + name + ' from roster?')) return;
+      state.roster = state.roster.filter(p => p !== name);
+      state.players = state.players.filter(p => p !== name);
+      save(); render(); renderRoster();
+    };
+    ul.appendChild(li);
+  });
+}
+$('rosterBtn').onclick = () => { renderRoster(); $('panel').classList.add('open'); };
+$('closePanel').onclick = () => $('panel').classList.remove('open');
+$('selAll').onclick = () => { state.players = state.players.concat(state.roster.filter(n => !state.players.includes(n))); save(); render(); renderRoster(); };
+$('selNone').onclick = () => { state.players = []; state.started = false; save(); render(); renderRoster(); };
 $('addForm').onsubmit = e => {
   e.preventDefault();
   const v = $('newName').value.trim();
   if (!v) return;
-  state.players.push(v); $('newName').value = '';
-  save(); render();
-  listEl.scrollTop = listEl.scrollHeight;
+  if (!state.roster.includes(v)) state.roster.push(v);
+  if (!state.players.includes(v)) state.players.push(v);
+  $('newName').value = '';
+  save(); render(); renderRoster();
+  $('rosterList').scrollTop = $('rosterList').scrollHeight;
 };
 
 Sortable.create(listEl, {
