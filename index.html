@@ -43,8 +43,8 @@
   .sortable-ghost { opacity:.35; }
   .sortable-chosen { box-shadow:0 8px 24px rgba(0,0,0,.5); }
   .divider { text-align:center; color:#9ca3af; font-weight:700; margin:-2px 0 8px; }
-  #panel { position:fixed; inset:0; background:rgba(0,0,0,.7); display:none; z-index:10; padding:max(16px,env(safe-area-inset-top)) 16px 16px; }
-  #panel.open { display:flex; }
+  #panel, #results { position:fixed; inset:0; background:rgba(0,0,0,.7); display:none; z-index:10; padding:max(16px,env(safe-area-inset-top)) 16px 16px; }
+  #panel.open, #results.open { display:flex; }
   .sheet { margin:auto; width:100%; max-width:720px; max-height:100%; background:var(--card); border-radius:20px; display:flex; flex-direction:column; padding:16px; }
   .sheet h2 { margin:0 0 4px; font-size:1.6rem; }
   .sheet p { margin:0 0 10px; color:#d1d5db; }
@@ -56,16 +56,30 @@
   #rosterList li.on { background:#16a34a; }
   #rosterList .name { font-size:1.7rem; }
   .check { font-size:2rem; width:48px; text-align:center; }
+  #clock { font-size:2.6rem; font-weight:800; font-variant-numeric:tabular-nums; }
+  .finish { background:#dc2626; }
+  #list li { touch-action:pan-y; transition:transform .15s; position:relative; }
+  #list li.swiping { transition:none; }
+  #list li.tired { outline:6px dashed #facc15; outline-offset:-6px; }
+  #list li.tired .name::after { content:'  ⇄ replacing…'; font-size:.45em; color:#facc15; text-shadow:0 1px 2px #000; }
+  #list li.sub-ready { box-shadow:inset 0 0 0 4px #facc15; }
+  table { width:100%; border-collapse:collapse; font-size:1.4rem; }
+  th, td { padding:10px 8px; text-align:left; border-bottom:1px solid #374151; }
+  th { color:#9ca3af; font-size:1rem; text-transform:uppercase; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  td.rank { width:48px; color:#9ca3af; font-weight:800; }
+  #resultsBody { overflow-y:auto; flex:1; margin-bottom:10px; }
 </style>
 </head>
 <body>
-<header><h1>⚽ Futsal Rotation</h1></header>
+<header><h1>⚽ Futsal Rotation</h1><div id="clock"></div></header>
 <div class="controls">
   <button class="start" id="start">▶ Start Game</button>
   <button class="o" id="outO">Orange Out</button>
   <button class="b" id="outB">Blue Out</button>
   <button class="both" id="outBoth">Both Out</button>
   <button id="rosterBtn" style="background:#374151">👥 Roster</button>
+  <button class="finish" id="doneBtn">🏁 Done</button>
 </div>
 <div id="status"></div>
 <ul id="list"></ul>
@@ -80,11 +94,23 @@
   </form>
 </div></div>
 
+<div id="results"><div class="sheet">
+  <h2>Match Day Results</h2>
+  <p id="resultsSummary"></p>
+  <div id="resultsBody"></div>
+  <div class="row"><button id="closeResults">Close</button><button class="done" id="newDay">Start new match day</button></div>
+</div></div>
+
 <script>
 const KEY = 'futsal-rotation-v2';
 const ROSTER = ['Akash Soccer','Kurvin','Ayodeji','Rayan Resenha Futebol','Brunno Futebol','Olamide Soccer','Ricardo Soccer','Giovanni Soccer Angui','Eder Soccer','Dr Richardson','Dafe Soccer','Rilwan Omololu Bello','Christovao Junger','Jaime Soccer Elite','Imajinary','Evans'];
 let state = { roster: ROSTER.slice(), players: ROSTER.slice(), started: false };
 try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && Array.isArray(s.players) && Array.isArray(s.roster)) state = s; } catch (e) {}
+
+state.stats = state.stats || {};       // name -> { games, wins, draws }
+state.gamesPlayed = state.gamesPlayed || 0;
+state.subbedOut = state.subbedOut || []; // [{ name, team }] replaced during current game
+state.tired = state.tired || null;       // player marked for replacement
 
 const $ = id => document.getElementById(id);
 const listEl = $('list');
@@ -101,6 +127,9 @@ function render() {
   state.players.forEach((name, i) => {
     const li = document.createElement('li');
     if (state.started) li.className = i < 5 ? 'orange' : i < 10 ? 'blue' : '';
+    if (state.started && name === state.tired) li.classList.add('tired');
+    if (state.started && state.tired && i >= 10) li.classList.add('sub-ready');
+    addSwipe(li, name);
     li.innerHTML = '<span class="pos"></span><span class="name"></span><button class="del" aria-label="Remove">✕</button><span class="handle" aria-label="Drag">☰</span>';
     li.querySelector('.pos').textContent = i + 1;
     li.querySelector('.name').textContent = name;
@@ -111,6 +140,8 @@ function render() {
       const v = (prompt('Edit name', name) || '').trim();
       if (!v || v === name) return;
       const r = state.roster.indexOf(name); if (r >= 0) state.roster[r] = v;
+      if (state.stats[name]) { state.stats[v] = state.stats[name]; delete state.stats[name]; }
+      if (state.tired === name) state.tired = v;
       state.players[i] = v; save(); render(); renderRoster();
     };
     listEl.appendChild(li);
@@ -119,13 +150,29 @@ function render() {
   $('start').disabled = n < 1;
   $('outO').disabled = $('outB').disabled = $('outBoth').disabled = !state.started;
   $('status').textContent = state.started
-    ? 'Game on: top 5 Orange vs next 5 Blue. Next up: ' + (state.players[10] || '—')
+    ? (state.tired
+        ? 'Replacing ' + state.tired + ': swipe ← on the player coming in (swipe ← again on ' + state.tired + ' to cancel).'
+        : 'Game on: top 5 Orange vs next 5 Blue. Next up: ' + (state.players[10] || '—') + '. Swipe ← on a player to replace them.')
     : 'Press Start Game to assign teams. Drag ☰ to reorder, tap a name to edit, 👥 Roster to pick players.';
 }
 
 $('start').onclick = () => { state.started = true; save(); render(); };
 
-function out(count, from) {
+function recordGame(result) { // result: 'orange' | 'blue' | 'draw'
+  const field = state.players.slice(0, 10).map((name, i) => ({ name, team: i < 5 ? 'orange' : 'blue' }));
+  const seen = new Set();
+  field.concat(state.subbedOut).forEach(({ name, team }) => {
+    if (seen.has(name)) return; seen.add(name);
+    const st = state.stats[name] || (state.stats[name] = { games: 0, wins: 0, draws: 0 });
+    st.games++;
+    if (result === 'draw') st.draws++; else if (team === result) st.wins++;
+  });
+  state.gamesPlayed++;
+  state.subbedOut = []; state.tired = null;
+}
+
+function out(count, from, result) {
+  recordGame(result);
   const p = state.players;
   const leaving = p.splice(from, count);
   state.players = p.concat(shuffle(leaving));
@@ -133,9 +180,76 @@ function out(count, from) {
   save(); render();
   listEl.scrollTop = 0;
 }
-$('outO').onclick = () => out(5, 0);   // orange = positions 1-5
-$('outB').onclick = () => out(5, 5);   // blue = positions 6-10
-$('outBoth').onclick = () => out(10, 0);
+$('outO').onclick = () => out(5, 0, 'blue');   // orange lost: positions 1-5 out
+$('outB').onclick = () => out(5, 5, 'orange');  // blue lost: positions 6-10 out
+$('outBoth').onclick = () => out(10, 0, 'draw');
+
+// Swipe left on a playing player marks them for replacement; swipe left on a
+// bench player brings them in at that spot and the replaced player goes to the end.
+function swipeLeft(name) {
+  if (!state.started) return;
+  const i = state.players.indexOf(name);
+  if (i < 10) { state.tired = state.tired === name ? null : name; }
+  else if (state.tired) {
+    const t = state.players.indexOf(state.tired);
+    if (t < 0 || t >= 10) { state.tired = null; }
+    else {
+      state.subbedOut.push({ name: state.tired, team: t < 5 ? 'orange' : 'blue' });
+      const p = state.players.filter(n => n !== name && n !== state.tired);
+      p.splice(t, 0, name);
+      p.push(state.tired);
+      state.players = p; state.tired = null;
+    }
+  }
+  save(); render();
+}
+function addSwipe(li, name) {
+  let x0 = null, y0 = 0, dx = 0, horiz = false;
+  li.addEventListener('pointerdown', e => {
+    if (!state.started || e.target.closest('.handle,.del')) return;
+    x0 = e.clientX; y0 = e.clientY; dx = 0; horiz = false;
+  });
+  li.addEventListener('pointermove', e => {
+    if (x0 === null) return;
+    dx = e.clientX - x0;
+    if (!horiz && Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(e.clientY - y0)) { horiz = true; li.classList.add('swiping'); try { li.setPointerCapture(e.pointerId); } catch (_) {} }
+    if (horiz) li.style.transform = 'translateX(' + Math.min(0, dx) + 'px)';
+  });
+  const end = () => {
+    if (x0 === null) return;
+    x0 = null; li.classList.remove('swiping'); li.style.transform = '';
+    if (horiz && dx < -90) { li.dataset.swiped = '1'; setTimeout(() => swipeLeft(name), 0); }
+  };
+  li.addEventListener('pointerup', end);
+  li.addEventListener('pointercancel', end);
+  li.addEventListener('click', e => { if (li.dataset.swiped) { e.stopPropagation(); e.preventDefault(); } }, true);
+}
+
+function tick() {
+  const d = new Date();
+  $('clock').textContent = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+tick(); setInterval(tick, 5000);
+
+function showResults() {
+  const rows = Object.entries(state.stats)
+    .map(([name, s]) => ({ name, ...s, losses: s.games - s.wins - (s.draws || 0) }))
+    .sort((a, b) => b.games - a.games || b.wins - a.wins || a.name.localeCompare(b.name));
+  $('resultsSummary').textContent = state.gamesPlayed + ' game' + (state.gamesPlayed === 1 ? '' : 's') + ' played today. Ranked by games played, then wins.';
+  const esc = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  $('resultsBody').innerHTML = rows.length
+    ? '<table><tr><th>#</th><th>Player</th><th class="num">Games</th><th class="num">Wins</th><th class="num">Draws</th><th class="num">Losses</th></tr>' +
+      rows.map((r, i) => '<tr><td class="rank">' + (i + 1) + '</td><td>' + esc(r.name) + '</td><td class="num">' + r.games + '</td><td class="num">' + r.wins + '</td><td class="num">' + (r.draws || 0) + '</td><td class="num">' + r.losses + '</td></tr>').join('') + '</table>'
+    : '<p>No games recorded yet. A game is recorded when you press Orange Out, Blue Out or Both Out.</p>';
+  $('results').classList.add('open');
+}
+$('doneBtn').onclick = showResults;
+$('closeResults').onclick = () => $('results').classList.remove('open');
+$('newDay').onclick = () => {
+  if (!confirm('Clear today\'s results and start a new match day?')) return;
+  state.stats = {}; state.gamesPlayed = 0; state.subbedOut = []; state.tired = null; state.started = false;
+  save(); render(); $('results').classList.remove('open');
+};
 
 function renderRoster() {
   const ul = $('rosterList'); ul.innerHTML = '';
